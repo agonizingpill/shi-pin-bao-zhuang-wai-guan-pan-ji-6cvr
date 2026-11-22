@@ -209,6 +209,25 @@ td a { font-size: 11px; }
 .process .active { color: var(--rust); font-weight: 750; }
 .verify-panel > button { margin-top: 12px; }
 .verify-panel .muted { line-height: 1.75; }
+.coverage { margin: 4px 0 13px; }
+.coverage-bar { display: flex; gap: 2px; height: 18px; padding: 2px; background: oklch(91% .021 96); border: 1px solid var(--line); }
+.coverage-bar span { display: block; width: var(--span); min-width: 2px; }
+.coverage-bar .passed { background: repeating-linear-gradient(135deg, var(--pine) 0 4px, oklch(47% .074 150) 4px 8px); }
+.coverage-bar .gap { background: repeating-linear-gradient(135deg, var(--amber) 0 4px, oklch(85% .07 81) 4px 8px); }
+.coverage-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 7px; font-size: 11px; color: var(--muted); }
+.coverage-legend i { display: inline-block; width: 9px; height: 9px; margin-right: 4px; vertical-align: -1px; }
+.coverage-legend i.passed { background: var(--pine); }
+.coverage-legend i.gap { background: var(--accent); }
+.coverage-legend b { margin-left: auto; color: var(--ink); }
+.range-fields { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.field-hint { font-size: 10px; color: var(--muted); line-height: 1.7; font-weight: 400; }
+.segment-table td { height: auto; vertical-align: top; white-space: normal; }
+.segment-table th { white-space: nowrap; }
+.segment-table .failed-row { background: oklch(96% .025 45); }
+.segment-readings summary { font-size: 11px; color: var(--pine); cursor: pointer; }
+.segment-readings .channel-list { min-width: 150px; margin-top: 5px; }
+.segment-readings p { margin: 5px 0 0; font-size: 11px; color: var(--muted); }
+.status.verified { background: var(--green); color: var(--forest); }
 
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .full { grid-column: 1 / -1; }

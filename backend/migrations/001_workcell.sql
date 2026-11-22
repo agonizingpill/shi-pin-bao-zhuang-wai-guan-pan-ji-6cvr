@@ -92,6 +92,32 @@ CREATE TABLE IF NOT EXISTS rework_issue (
     verified_at timestamptz,
     verification_note text
 );
+CREATE TABLE IF NOT EXISTS rework_retest (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    issue_id bigint NOT NULL REFERENCES rework_issue(id),
+    lot_id bigint NOT NULL REFERENCES pack_lot(id),
+    sample text NOT NULL,
+    attempt_key char(64) NOT NULL,
+    machine text NOT NULL CHECK (machine IN ('VS-01', 'VS-02', 'VS-03')),
+    first_unit integer NOT NULL CHECK (first_unit >= 1),
+    last_unit integer NOT NULL CHECK (last_unit >= first_unit),
+    wrinkle_pct double precision CHECK (wrinkle_pct BETWEEN 0 AND 100),
+    offset_mm double precision CHECK (offset_mm BETWEEN 0 AND 20),
+    delta_e double precision CHECK (delta_e BETWEEN 0 AND 60),
+    seal_gap_mm double precision CHECK (seal_gap_mm BETWEEN 0 AND 12),
+    gloss_cv double precision CHECK (gloss_cv BETWEEN 0 AND 100),
+    outcome text NOT NULL CHECK (outcome IN ('passed', 'failed')),
+    checks jsonb NOT NULL DEFAULT '{}'::jsonb,
+    model_grade char(1) CHECK (model_grade IN ('A', 'B', 'C')),
+    evidence jsonb,
+    note text NOT NULL,
+    created_by text NOT NULL REFERENCES staff(username),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (issue_id, sample),
+    UNIQUE (issue_id, attempt_key)
+);
+CREATE INDEX IF NOT EXISTS rework_retest_passed ON rework_retest(issue_id, first_unit, last_unit)
+    WHERE outcome = 'passed';
 CREATE TABLE IF NOT EXISTS audit_event (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     lot_id bigint NOT NULL REFERENCES pack_lot(id),

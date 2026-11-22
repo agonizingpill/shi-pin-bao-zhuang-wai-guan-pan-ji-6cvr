@@ -4,6 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg import errors
@@ -152,7 +153,7 @@ def verify(lot_id: int, data: Verification, actor=Depends(supervisor)):
     with connect() as db:
         result = disposition.verify_rework(db, lot_id, data, actor)
     if result.get('rejected'):
-        raise HTTPException(409, result)
+        raise HTTPException(409, jsonable_encoder(result))
     return result
 
 

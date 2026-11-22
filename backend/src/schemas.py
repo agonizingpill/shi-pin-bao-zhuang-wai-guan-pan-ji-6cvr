@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 class Role(StrEnum):
@@ -96,8 +96,17 @@ class GradeReview(Payload):
 
 
 class Verification(MeasureInput):
-    replaced_units: Qty
+    """One film-replacement segment, numbered from the issued quantity."""
+
+    first_unit: Qty
+    last_unit: Qty
     note: Note
+
+    @model_validator(mode='after')
+    def ordered_range(self):
+        if self.first_unit > self.last_unit:
+            raise ValueError('首件号不能大于尾件号')
+        return self
 
 
 CHANNELS = ('wrinkle_pct', 'offset_mm', 'delta_e', 'seal_gap_mm', 'gloss_cv')

@@ -34,6 +34,35 @@ def missing_channels(measure):
     return [channel for channel in CHANNELS if not measure or measure[channel] is None]
 
 
+def range_gaps(ranges, total):
+    """Return the unit-number spans not covered by any passed segment."""
+    gaps = []
+    cursor = 1
+    for item in sorted(ranges, key=lambda row: row['first_unit']):
+        first, last = item['first_unit'], item['last_unit']
+        if first > cursor:
+            gaps.append({'first': cursor, 'last': first - 1})
+        cursor = max(cursor, last + 1)
+    if cursor <= total:
+        gaps.append({'first': cursor, 'last': total})
+    return gaps
+
+
+def rework_progress(db, issue):
+    """Segments are numbered from 1 to the issued quantity; only passes count toward coverage."""
+    if not issue:
+        return None
+    rows = db.execute('SELECT * FROM rework_retest WHERE issue_id=%s ORDER BY first_unit,id',
+                      (issue['id'],)).fetchall()
+    passed = [row for row in rows if row['outcome'] == 'passed']
+    # A single-verification issue recorded before segmented retests counts as fully covered.
+    legacy_closed = not rows and issue['state'] == 'verified'
+    gaps = [] if legacy_closed else range_gaps(passed, issue['required_units'])
+    return {'required_units': issue['required_units'], 'passed_units': sum(
+                row['last_unit'] - row['first_unit'] + 1 for row in passed),
+            'segments': rows, 'gaps': gaps, 'complete': not gaps}
+
+
 def create_lot(db, data, actor):
     if not db.execute('SELECT 1 FROM material_stock WHERE sku=%s', (data.film_sku,)).fetchone():
         raise HTTPException(422, '膜材 SKU 不在库位表中')
@@ -135,4 +164,5 @@ def lot_detail(db, lot_id):
     events = db.execute('SELECT * FROM audit_event WHERE lot_id=%s ORDER BY id DESC', (lot_id,)).fetchall()
     current = next((m for m in measures if m['purpose'] == 'grading'), None)
     return {'lot': lot, 'measures': measures, 'current': current, 'missing': missing_channels(current),
-            'marks': marks, 'decisions': decisions, 'rework': rework, 'events': events}
+            'marks': marks, 'decisions': decisions, 'rework': rework, 'progress': rework_progress(db, rework),
+            'events': events}

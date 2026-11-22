@@ -88,7 +88,7 @@ function notify(text, kind = 'success') {
   feedbackTimer = setTimeout(() => { notice.className = ''; notice.textContent = ''; }, 6500);
 }
 
-const numeric = new Set(['units','x_pct','y_pct','rework_units','replaced_units',...CHANNELS.map(([key])=>key)]);
+const numeric = new Set(['units','x_pct','y_pct','rework_units','first_unit','last_unit',...CHANNELS.map(([key])=>key)]);
 function serialize(form, submitter) {
   const entries = new FormData(form, submitter);
   return Object.fromEntries([...entries].flatMap(([key,value]) => {
@@ -97,7 +97,7 @@ function serialize(form, submitter) {
   }));
 }
 
-const success = {measurements:'测量归档成功', marks:'缺陷已标记', grade:'判级已提交', 'grade/review':'等级已签核', 'rework/issue':'领料已过账', 'rework/verify':'复测已签核', close:'批次已关闭'};
+const success = {measurements:'测量归档成功', marks:'缺陷已标记', grade:'判级已提交', 'grade/review':'等级已签核', 'rework/issue':'领料已过账', 'rework/verify':'该段复测已通过', close:'批次已关闭'};
 async function perform(action, button, payload) {
   if (button) button.disabled = true;
   try {
@@ -105,11 +105,12 @@ async function perform(action, button, payload) {
       const lot = await api.register(payload);
       navigate(lotLink('workbench',lot.id));
     } else {
-      await api.action(store.detail.lot.id, action, payload);
+      const result = await api.action(store.detail.lot.id, action, payload);
       await load();
-      notify(success[action] || '缺陷复核已保存');
+      notify(action === 'rework/verify' ? (result.complete ? '全部件号已覆盖，批次已放行待关闭' : '该段复测已通过，仍有空档待复测') : success[action] || '缺陷复核已保存');
     }
   } catch (error) {
+    if (action === 'rework/verify') await load().catch(() => {});
     const message = `${error.message}${error.channels?.length ? ' · '+error.channels.map(channelName).join('、') : ''}`;
     const dialog = button?.closest('dialog');
     if (dialog?.isConnected) {

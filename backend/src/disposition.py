@@ -1,7 +1,13 @@
-from fastapi import HTTPException
+import hashlib
+import json
 
-from .inspection import audit, insert_measure, latest_grade, latest_measure, lot_row, missing_channels, set_state
-from .schemas import VERIFICATION_LIMITS
+from fastapi import HTTPException
+from psycopg.types.json import Jsonb
+
+from .inspection import (audit, latest_grade, latest_measure, lot_row, missing_channels,
+                         rework_progress, set_state)
+from .model import predict
+from .schemas import CHANNELS, VERIFICATION_LIMITS
 
 
 def sign_grade(db, lot_id, data, actor):
@@ -56,34 +62,120 @@ def issue_material(db, lot_id, actor):
     return row
 
 
+def retest_digest(data):
+    """Fingerprint one retest attempt so a network retry cannot add a second record."""
+    payload = {'sample': data.sample, 'machine': data.machine, 'first_unit': data.first_unit,
+               'last_unit': data.last_unit, 'channels': {key: getattr(data, key) for key in CHANNELS}}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def retest_rejection(row, progress):
+    checks = row['checks'] or {}
+    missing = checks.get('missing') or []
+    exceeds = checks.get('exceeds') or []
+    grade = row['model_grade']
+    if checks.get('model_fault'):
+        causes = ['模型计算失败']
+    else:
+        causes = []
+        if missing:
+            causes.append('通道缺失')
+        if exceeds:
+            causes.append('读数超限')
+        if grade and grade != 'A':
+            causes.append(f'模型判定 {grade} 级')
+    return {'rejected': True, 'segment_id': row['id'], 'sample': row['sample'],
+            'first_unit': row['first_unit'], 'last_unit': row['last_unit'],
+            'missing': missing, 'exceeds': exceeds, 'model_grade': grade,
+            'message': f"该段复测未通过（{'、'.join(causes) or '读数无效'}），已留存记录，可换样重测",
+            'progress': progress}
+
+
 def verify_rework(db, lot_id, data, actor):
+    """Record one numbered segment of a film replacement.
+
+    Segments run from unit 1 to the issued quantity. A segment passes only when all five
+    channels are present, within limits, and the model also returns grade A. Failed
+    attempts are kept and can be retried with another sample.
+    """
     lot = lot_row(db, lot_id, lock=True)
-    issue = issue_row(db, lot_id, 'issued')
-    if data.replaced_units != issue['required_units']:
-        raise HTTPException(422, '换膜件数必须与领料单数量一致')
-    reading = data.model_dump()
+    issue = db.execute('SELECT * FROM rework_issue WHERE lot_id=%s FOR UPDATE', (lot_id,)).fetchone()
+    if not issue:
+        raise HTTPException(409, '找不到该批次的返工单')
     if data.machine != lot['machine']:
         raise HTTPException(409, '复测机台必须与原批次一致')
+    digest = retest_digest(data)
+    # The issue row lock above serialises submissions, so an identical retry sees the first record.
+    existing = db.execute('SELECT * FROM rework_retest WHERE issue_id=%s AND attempt_key=%s',
+                          (issue['id'], digest)).fetchone()
+    if existing:
+        progress = rework_progress(db, issue)
+        if existing['outcome'] == 'failed':
+            return retest_rejection(existing, progress)
+        return {'segment': existing, 'progress': progress, 'complete': progress['complete'], 'replayed': True}
+    if issue['state'] != 'issued':
+        raise HTTPException(409, '返工单状态与此操作不匹配')
+    total = issue['required_units']
+    if data.last_unit > total:
+        raise HTTPException(422, f'首尾件号须落在 1–{total} 的领料范围内')
+    if db.execute('SELECT 1 FROM rework_retest WHERE issue_id=%s AND sample=%s',
+                  (issue['id'], data.sample)).fetchone():
+        raise HTTPException(409, '该复测样本号已经登记，请换样重测')
+    reading = data.model_dump()
     missing = missing_channels(reading)
     exceeds = [key for key, limit in VERIFICATION_LIMITS.items() if reading[key] is not None and reading[key] > limit]
-    if missing or exceeds:
-        # Keep failed retests in the audit trail while leaving the material movement untouched.
-        audit(db, lot_id, actor, 'rework_retest_rejected', sample=data.sample, missing=missing, exceeds=exceeds,
-              channels={key: reading[key] for key in VERIFICATION_LIMITS}, note=data.note)
-        return {'rejected': True, 'message': '返工复测未通过，请重新采样', 'missing': missing, 'exceeds': exceeds}
-    measure = insert_measure(db, lot, data, actor, purpose='verification')
-    row = db.execute('''UPDATE rework_issue SET state='verified',verification_id=%s,
-                          verified_by=%s,verified_at=now(),verification_note=%s WHERE id=%s RETURNING *''',
-                     (measure['id'], actor, data.note, issue['id'])).fetchone()
-    set_state(db, lot, 'approved')
-    audit(db, lot_id, actor, 'rework_verified', sample=measure['sample'], replaced_units=data.replaced_units)
-    return row
+    grade, evidence = None, None
+    fault = False
+    if not missing:
+        try:
+            grade, evidence = predict(reading)
+        except Exception:  # a model fault still leaves a failed record, not a lost attempt
+            fault = True
+    passed = not missing and not exceeds and grade == 'A'
+    # Overlaps are checked after the issue lock; only ranges that already passed count.
+    if passed:
+        overlap = db.execute('''SELECT * FROM rework_retest WHERE issue_id=%s AND outcome='passed'
+                                AND first_unit <= %s AND last_unit >= %s ORDER BY id LIMIT 1''',
+                             (issue['id'], data.last_unit, data.first_unit)).fetchone()
+        if overlap:
+            raise HTTPException(409, f"该段与已通过段 #{overlap['first_unit']}–#{overlap['last_unit']} 重叠，"
+                                     '不能重复计入，请核对首尾件号')
+    checks = {'missing': missing, 'exceeds': exceeds, 'model_grade': grade, 'model_fault': fault}
+    row = db.execute('''INSERT INTO rework_retest(issue_id,lot_id,sample,attempt_key,machine,first_unit,last_unit,
+                             wrinkle_pct,offset_mm,delta_e,seal_gap_mm,gloss_cv,outcome,checks,model_grade,evidence,
+                             note,created_by)
+                         VALUES (%(issue_id)s,%(lot_id)s,%(sample)s,%(key)s,%(machine)s,%(first_unit)s,%(last_unit)s,
+                             %(wrinkle_pct)s,%(offset_mm)s,%(delta_e)s,%(seal_gap_mm)s,%(gloss_cv)s,%(outcome)s,
+                             %(checks)s,%(grade)s,%(evidence)s,%(note)s,%(actor)s)
+                         RETURNING *''',
+                     {**reading, 'issue_id': issue['id'], 'lot_id': lot_id, 'key': digest,
+                      'outcome': 'passed' if passed else 'failed', 'checks': Jsonb(checks), 'grade': grade,
+                      'evidence': Jsonb(evidence) if evidence else None, 'actor': actor}).fetchone()
+    progress = rework_progress(db, issue)
+    if not passed:
+        audit(db, lot_id, actor, 'rework_retest_rejected', segment_id=row['id'], sample=row['sample'],
+              first_unit=row['first_unit'], last_unit=row['last_unit'], missing=missing, exceeds=exceeds,
+              model_grade=grade, note=data.note)
+        return retest_rejection(row, progress)
+    audit(db, lot_id, actor, 'rework_retest_passed', segment_id=row['id'], sample=row['sample'],
+          first_unit=row['first_unit'], last_unit=row['last_unit'], model_grade=grade, note=data.note)
+    if progress['complete']:
+        db.execute('''UPDATE rework_issue SET state='verified',verified_by=%s,verified_at=now(),
+                      verification_note=%s WHERE id=%s''', (actor, data.note, issue['id']))
+        set_state(db, lot, 'approved')
+        audit(db, lot_id, actor, 'rework_verified', sample=row['sample'], segments=len(progress['segments']),
+              replaced_units=total)
+        progress = rework_progress(db, issue)
+    return {'segment': row, 'progress': progress, 'complete': progress['complete'], 'replayed': False}
 
 
 def close_lot(db, lot_id, actor):
     lot = lot_row(db, lot_id, lock=True)
     if lot['state'] != 'approved':
         raise HTTPException(409, '批次尚未获得放行，待领料或待复测的返工必须先闭环')
+    issue = db.execute('SELECT * FROM rework_issue WHERE lot_id=%s', (lot_id,)).fetchone()
+    if issue and not rework_progress(db, issue)['complete']:
+        raise HTTPException(409, '返工复测尚未覆盖全部件号，不能关闭批次')
     row = db.execute("UPDATE pack_lot SET state='closed',closed_at=now(),closed_by=%s WHERE id=%s RETURNING *",
                      (actor, lot_id)).fetchone()
     audit(db, lot_id, actor, 'lot_closed', code=lot['code'])

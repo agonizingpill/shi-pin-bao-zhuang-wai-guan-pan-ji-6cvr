@@ -8,4 +8,4 @@ export const CHANNELS = [
 ];
 export const DEFECTS = {wrinkle:'褶皱', offset:'印刷偏位', color:'色差', seal:'热封异常', gloss:'光泽不均'};
 export const ZONES = {front:'正面', back:'背面', 'top-seal':'上封口', 'bottom-seal':'下封口'};
-export const EVENT_LABELS = {lot_registered:'包装批次登记', measurement_saved:'测量版本归档', channels_missing:'通道缺失，禁止判级', defect_marked:'记录缺陷位置', defect_reviewed:'签核缺陷标记', grade_queued:'提交模型判级', model_predicted:'模型建议已回写', grade_failed:'判级计算失败', grade_signed:'主管签核等级', rework_requested:'生成返工领料单', material_issued:'膜材领料过账', rework_retest_rejected:'返工复测未通过', rework_verified:'返工复测通过', lot_closed:'关闭包装批次'};
+export const EVENT_LABELS = {lot_registered:'包装批次登记', measurement_saved:'测量版本归档', channels_missing:'通道缺失，禁止判级', defect_marked:'记录缺陷位置', defect_reviewed:'签核缺陷标记', grade_queued:'提交模型判级', model_predicted:'模型建议已回写', grade_failed:'判级计算失败', grade_signed:'主管签核等级', rework_requested:'生成返工领料单', material_issued:'膜材领料过账', rework_retest_rejected:'返工复测未通过', rework_retest_passed:'返工分段复测通过', rework_verified:'返工复测已覆盖，批次放行', lot_closed:'关闭包装批次'};
